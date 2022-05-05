@@ -1,73 +1,45 @@
-import Queue from 'bull';
-import { ObjectId } from 'mongodb';
-import { promises as fsPromises } from 'fs';
-import fileUtils from './utils/file';
-import userUtils from './utils/user';
-import basicUtils from './utils/basic';
+import DBClient from './utils/db';
 
+const Bull = require('bull');
+const { ObjectId } = require('mongodb');
 const imageThumbnail = require('image-thumbnail');
+const fs = require('fs');
 
-const fileQueue = new Queue('fileQueue');
-const userQueue = new Queue('userQueue');
+const fileQueue = new Bull('fileQueue');
+const userQueue = new Bull('userQueue');
+
+const createImageThumbnail = async (path, options) => {
+  try {
+    const thumbnail = await imageThumbnail(path, options);
+    const pathNail = `${path}_${options.width}`;
+
+    await fs.writeFileSync(pathNail, thumbnail);
+  } catch (error) {
+    console.log(error);
+  }
+};
 
 fileQueue.process(async (job) => {
-  const { fileId, userId } = job.data;
+  const { fileId } = job.data;
+  if (!fileId) throw Error('Missing fileId');
 
-  // Delete bull keys in redis
-  //   redis-cli keys "bull*" | xargs redis-cli del
+  const { userId } = job.data;
+  if (!userId) throw Error('Missing userId');
 
-  if (!userId) {
-    console.log('Missing userId');
-    throw new Error('Missing userId');
-  }
+  const fileDocument = await DBClient.db.collection('files').findOne({ _id: ObjectId(fileId), userId: ObjectId(userId) });
+  if (!fileDocument) throw Error('File not found');
 
-  if (!fileId) {
-    console.log('Missing fileId');
-    throw new Error('Missing fileId');
-  }
-
-  if (!basicUtils.isValidId(fileId) || !basicUtils.isValidId(userId)) throw new Error('File not found');
-
-  const file = await fileUtils.getFile({
-    _id: ObjectId(fileId),
-    userId: ObjectId(userId),
-  });
-
-  if (!file) throw new Error('File not found');
-
-  const { localPath } = file;
-  const options = {};
-  const widths = [500, 250, 100];
-
-  widths.forEach(async (width) => {
-    options.width = width;
-    try {
-      const thumbnail = await imageThumbnail(localPath, options);
-      await fsPromises.writeFile(`${localPath}_${width}`, thumbnail);
-      //   console.log(thumbnail);
-    } catch (err) {
-      console.error(err.message);
-    }
-  });
+  createImageThumbnail(fileDocument.localPath, { width: 500 });
+  createImageThumbnail(fileDocument.localPath, { width: 250 });
+  createImageThumbnail(fileDocument.localPath, { width: 100 });
 });
 
 userQueue.process(async (job) => {
   const { userId } = job.data;
-  // Delete bull keys in redis
-  //   redis-cli keys "bull*" | xargs redis-cli del
+  if (!userId) throw Error('Missing userId');
 
-  if (!userId) {
-    console.log('Missing userId');
-    throw new Error('Missing userId');
-  }
+  const userDocument = await DBClient.db.collection('users').findOne({ _id: ObjectId(userId) });
+  if (!userDocument) throw Error('User not found');
 
-  if (!basicUtils.isValidId(userId)) throw new Error('User not found');
-
-  const user = await userUtils.getUser({
-    _id: ObjectId(userId),
-  });
-
-  if (!user) throw new Error('User not found');
-
-  console.log(`Welcome ${user.email}!`);
+  console.log(`Welcome ${userDocument.email}`);
 });
